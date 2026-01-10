@@ -1,0 +1,6 @@
+version: "2"
+authtoken: YOUR_NGROK_AUTHTOKEN_HERE
+tunnels:
+  leadpro:
+    addr: app:3000
+    proto: http

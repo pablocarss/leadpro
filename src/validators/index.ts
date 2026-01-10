@@ -1,0 +1,7 @@
+export * from './user.validator'
+export * from './lead.validator'
+export * from './contact.validator'
+export * from './company.validator'
+export * from './deal.validator'
+export * from './task.validator'
+export * from './pipeline.validator'

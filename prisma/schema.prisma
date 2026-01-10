@@ -1,0 +1,631 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==================== AUTH ====================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  password      String
+  avatar        String?
+  role          UserRole  @default(USER)
+  isActive      Boolean   @default(true)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  leads         Lead[]
+  contacts      Contact[]
+  companies     Company[]
+  deals         Deal[]
+  tasks         Task[]
+  notes         Note[]
+  activities    Activity[]
+  automations   Automation[]
+
+  // Pipeline relations
+  pipelines     Pipeline[]
+  stageMovements StageMovement[]
+
+  // WebChat relations
+  webChatWidgets    WebChatWidget[]
+  webChatAssigned   WebChatSession[] @relation("WebChatAssigned")
+  webChatMessages   WebChatMessage[] @relation("WebChatOperator")
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  USER
+}
+
+// ==================== CRM CORE ====================
+
+model Lead {
+  id          String     @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  source      LeadSource @default(OTHER)
+  status      LeadStatus @default(NEW)
+  value       Decimal?   @db.Decimal(10, 2)
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId   String?
+  company     Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  notes       Note[]
+  tasks       Task[]
+  activities  Activity[]
+  pipelineLeads PipelineLead[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("leads")
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  SOCIAL_MEDIA
+  COLD_CALL
+  EMAIL_CAMPAIGN
+  EVENT
+  OTHER
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  position  String?
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // WhatsApp sync
+  whatsappJid       String?
+  whatsappSessionId String?
+  whatsappSession   WhatsappSession? @relation(fields: [whatsappSessionId], references: [id], onDelete: SetNull)
+  syncedFromWhatsapp Boolean @default(false)
+
+  // Relations
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deals     Deal[]
+  notes     Note[]
+  tasks     Task[]
+  activities Activity[]
+  pipelineLeads PipelineLead[]
+
+  @@index([userId])
+  @@index([whatsappSessionId])
+  @@index([whatsappJid])
+  @@map("contacts")
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  website   String?
+  industry  String?
+  size      String?
+  address   String?
+  city      String?
+  state     String?
+  country   String?
+  zipCode   String?
+  phone     String?
+  email     String?
+  logo      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts  Contact[]
+  leads     Lead[]
+  deals     Deal[]
+  notes     Note[]
+  activities Activity[]
+
+  @@index([userId])
+  @@map("companies")
+}
+
+model Deal {
+  id          String     @id @default(cuid())
+  title       String
+  value       Decimal    @db.Decimal(12, 2)
+  stage       DealStage  @default(QUALIFICATION)
+  probability Int        @default(0)
+  expectedCloseDate DateTime?
+  closedAt    DateTime?
+  description String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactId   String?
+  contact     Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  companyId   String?
+  company     Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  notes       Note[]
+  tasks       Task[]
+  activities  Activity[]
+
+  @@index([userId])
+  @@index([stage])
+  @@map("deals")
+}
+
+enum DealStage {
+  QUALIFICATION
+  NEEDS_ANALYSIS
+  PROPOSAL
+  NEGOTIATION
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+// ==================== ACTIVITIES ====================
+
+model Task {
+  id          String     @id @default(cuid())
+  title       String
+  description String?
+  dueDate     DateTime?
+  priority    Priority   @default(MEDIUM)
+  status      TaskStatus @default(TODO)
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // Relations
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadId      String?
+  lead        Lead?      @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId   String?
+  contact     Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId      String?
+  deal        Deal?      @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@map("tasks")
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("notes")
+}
+
+model Activity {
+  id          String       @id @default(cuid())
+  type        ActivityType
+  description String
+  metadata    Json?
+  createdAt   DateTime     @default(now())
+
+  // Relations
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leadId      String?
+  lead        Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contactId   String?
+  contact     Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  companyId   String?
+  company     Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId      String?
+  deal        Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([type])
+  @@map("activities")
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  TASK_CREATED
+  TASK_COMPLETED
+  DEAL_CREATED
+  DEAL_STAGE_CHANGED
+  LEAD_CREATED
+  LEAD_STATUS_CHANGED
+  WHATSAPP_MESSAGE
+  OTHER
+}
+
+// ==================== INTEGRATIONS ====================
+
+model Integration {
+  id          String            @id @default(cuid())
+  name        String
+  type        IntegrationType
+  status      IntegrationStatus @default(DISCONNECTED)
+  config      Json?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  // Relations
+  userId      String
+  whatsappSessions WhatsappSession[]
+
+  @@unique([userId, type])
+  @@index([userId])
+  @@map("integrations")
+}
+
+enum IntegrationType {
+  WHATSAPP_OFFICIAL
+  WHATSAPP_BAILEYS
+  EMAIL_SMTP
+  TELEGRAM
+  INSTAGRAM
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  CONNECTING
+  ERROR
+}
+
+model WhatsappSession {
+  id            String              @id @default(cuid())
+  name          String
+  phone         String?
+  status        WhatsappStatus      @default(DISCONNECTED)
+  qrCode        String?
+  lastConnected DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  // Sync settings
+  syncContacts     Boolean @default(false)
+  syncHistory      Boolean @default(false)
+  historyDays      Int     @default(7)
+  lastHistorySync  DateTime?
+  lastContactSync  DateTime?
+
+  // Sync status
+  isSyncing        Boolean @default(false)
+  syncProgress     String? // e.g. "Sincronizando mensagens... 50/100"
+
+  // Relations
+  integrationId String
+  integration   Integration         @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  messages      WhatsappMessage[]
+  contacts      Contact[]
+  automations   Automation[]
+
+  @@index([integrationId])
+  @@map("whatsapp_sessions")
+}
+
+enum WhatsappStatus {
+  CONNECTED
+  DISCONNECTED
+  CONNECTING
+  QR_CODE
+  ERROR
+}
+
+model WhatsappMessage {
+  id            String   @id @default(cuid())
+  messageId     String?  @unique
+  chatId        String   @default("")
+  from          String
+  to            String
+  body          String
+  mediaUrl      String?
+  mediaType     String?
+  mediaMimeType String?
+  mediaDuration Int?     // For audio/video in seconds
+  mediaFileName String?
+  isFromMe      Boolean  @default(false)
+  isRead        Boolean  @default(false)
+  timestamp     DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  // Relations
+  sessionId   String
+  session     WhatsappSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([chatId])
+  @@index([from])
+  @@index([to])
+  @@index([timestamp])
+  @@map("whatsapp_messages")
+}
+
+// ==================== AUTOMATIONS ====================
+
+model Automation {
+  id          String           @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean          @default(false)
+  trigger     AutomationTrigger @default(KEYWORD)
+  triggerValue String?         // Keyword or other trigger config
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  // Flow data stored as JSON (nodes and edges from ReactFlow)
+  nodes       Json             @default("[]")
+  edges       Json             @default("[]")
+  viewport    Json?            // ReactFlow viewport state
+
+  // Relations
+  userId      String
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  whatsappSessionId String?
+  whatsappSession   WhatsappSession? @relation(fields: [whatsappSessionId], references: [id], onDelete: SetNull)
+  executions  AutomationExecution[]
+
+  @@index([userId])
+  @@index([whatsappSessionId])
+  @@index([isActive])
+  @@map("automations")
+}
+
+enum AutomationTrigger {
+  KEYWORD          // Triggered by specific keyword
+  NEW_CONVERSATION // Triggered when new conversation starts
+  ALL_MESSAGES     // Triggered on any message
+  BUTTON_REPLY     // Triggered by button click
+  SCHEDULE         // Triggered on schedule
+}
+
+model AutomationExecution {
+  id            String   @id @default(cuid())
+  automationId  String
+  automation    Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  chatId        String   // WhatsApp chat ID
+  currentNodeId String?  // Current node in the flow
+  status        ExecutionStatus @default(RUNNING)
+  variables     Json     @default("{}") // Store variables during execution
+  startedAt     DateTime @default(now())
+  completedAt   DateTime?
+
+  @@index([automationId])
+  @@index([chatId])
+  @@index([status])
+  @@map("automation_executions")
+}
+
+enum ExecutionStatus {
+  RUNNING
+  WAITING_INPUT
+  COMPLETED
+  CANCELLED
+  ERROR
+}
+
+// ==================== PIPELINES ====================
+
+model Pipeline {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  color       String   @default("#3B82F6")
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  stages      PipelineStage[]
+  leads       PipelineLead[]
+
+  @@index([userId])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id          String   @id @default(cuid())
+  name        String
+  color       String   @default("#6B7280")
+  order       Int
+  isWon       Boolean  @default(false)
+  isLost      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  pipelineId  String
+  pipeline    Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads       PipelineLead[]
+  fromMovements StageMovement[] @relation("FromStage")
+  toMovements   StageMovement[] @relation("ToStage")
+
+  @@index([pipelineId])
+  @@map("pipeline_stages")
+}
+
+model PipelineLead {
+  id          String    @id @default(cuid())
+  title       String
+  value       Decimal?  @db.Decimal(10, 2)
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  wonAt       DateTime?
+  lostAt      DateTime?
+
+  // Relations
+  pipelineId  String
+  pipeline    Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stageId     String
+  stage       PipelineStage @relation(fields: [stageId], references: [id])
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  leadId      String?
+  lead        Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  movements   StageMovement[]
+
+  @@index([pipelineId])
+  @@index([stageId])
+  @@index([contactId])
+  @@map("pipeline_leads")
+}
+
+model StageMovement {
+  id             String    @id @default(cuid())
+  reason         String?
+  movedAt        DateTime  @default(now())
+
+  // Relations
+  pipelineLeadId String
+  pipelineLead   PipelineLead @relation(fields: [pipelineLeadId], references: [id], onDelete: Cascade)
+  fromStageId    String?
+  fromStage      PipelineStage? @relation("FromStage", fields: [fromStageId], references: [id], onDelete: SetNull)
+  toStageId      String
+  toStage        PipelineStage @relation("ToStage", fields: [toStageId], references: [id])
+  userId         String
+  user           User @relation(fields: [userId], references: [id])
+
+  @@index([pipelineLeadId])
+  @@map("stage_movements")
+}
+
+// ==================== WEB CHAT ====================
+
+model WebChatWidget {
+  id             String   @id @default(cuid())
+  name           String
+  primaryColor   String   @default("#3B82F6")
+  position       String   @default("right")
+  welcomeMessage String   @default("Olá! Como posso ajudar?")
+  allowedDomains String[] @default([])
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions       WebChatSession[]
+
+  @@index([userId])
+  @@map("webchat_widgets")
+}
+
+model WebChatSession {
+  id           String        @id @default(cuid())
+  visitorId    String
+  visitorName  String?
+  visitorEmail String?
+  pageUrl      String?
+  userAgent    String?
+  ipAddress    String?
+  status       WebChatStatus @default(OPEN)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  // Relations
+  widgetId     String
+  widget       WebChatWidget @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  assignedToId String?
+  assignedTo   User?         @relation("WebChatAssigned", fields: [assignedToId], references: [id], onDelete: SetNull)
+  messages     WebChatMessage[]
+
+  @@index([widgetId])
+  @@index([visitorId])
+  @@map("webchat_sessions")
+}
+
+enum WebChatStatus {
+  OPEN
+  CLOSED
+  PENDING
+}
+
+model WebChatMessage {
+  id            String   @id @default(cuid())
+  content       String
+  isFromVisitor Boolean
+  isRead        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  // Relations
+  sessionId     String
+  session       WebChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  operatorId    String?
+  operator      User?    @relation("WebChatOperator", fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@map("webchat_messages")
+}
