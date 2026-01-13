@@ -10,6 +10,7 @@ const updateSessionSchema = z.object({
   phone: z.string().optional().nullable(),
   syncContacts: z.boolean().optional(),
   syncHistory: z.boolean().optional(),
+  syncGroups: z.boolean().optional(),
   historyDays: z.number().min(1).max(30).optional(),
 })
 
@@ -134,6 +135,7 @@ export async function PATCH(
       whatsappService.createSession(id, {
         syncContacts: session.syncContacts,
         syncHistory: session.syncHistory,
+        syncGroups: session.syncGroups,
         historyDays: session.historyDays,
       }).catch(console.error)
 

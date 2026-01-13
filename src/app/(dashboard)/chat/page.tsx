@@ -730,21 +730,32 @@ function ChatPageContent() {
                               <div className="mb-2">
                                 {/* Image */}
                                 {msg.mediaType === "image" && (
-                                  <a href={msg.mediaUrl} target="_blank" rel="noopener noreferrer">
+                                  <a href={msg.mediaUrl!} target="_blank" rel="noopener noreferrer">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
-                                      src={msg.mediaUrl}
+                                      src={msg.mediaUrl!}
                                       alt="Imagem"
                                       className="rounded-lg max-w-full max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLImageElement;
+                                        target.style.display = 'none';
+                                        target.parentElement!.innerHTML = '<span class="text-xs text-muted-foreground">Erro ao carregar imagem</span>';
+                                      }}
                                     />
                                   </a>
                                 )}
 
                                 {/* Sticker */}
                                 {msg.mediaType === "sticker" && (
+                                  // eslint-disable-next-line @next/next/no-img-element
                                   <img
                                     src={msg.mediaUrl}
                                     alt="Sticker"
                                     className="max-w-24 max-h-24"
+                                    onError={(e) => {
+                                      const target = e.target as HTMLImageElement;
+                                      target.style.display = 'none';
+                                    }}
                                   />
                                 )}
 
@@ -754,6 +765,11 @@ function ChatPageContent() {
                                     src={msg.mediaUrl}
                                     controls
                                     className="rounded-lg max-w-full max-h-48"
+                                    onError={(e) => {
+                                      const target = e.target as HTMLVideoElement;
+                                      target.style.display = 'none';
+                                      target.parentElement!.innerHTML += '<span class="text-xs text-muted-foreground">Erro ao carregar vídeo</span>';
+                                    }}
                                   >
                                     Seu navegador não suporta vídeo.
                                   </video>
@@ -761,17 +777,24 @@ function ChatPageContent() {
 
                                 {/* Audio / Voice Note (PTT) */}
                                 {(msg.mediaType === "audio" || msg.mediaType === "ptt") && (
-                                  <div className="flex items-center gap-2 bg-background/50 rounded-full px-2 py-1.5 min-w-[160px]">
+                                  <div className="flex items-center gap-2 bg-background/50 rounded-full px-3 py-2 min-w-[200px]">
                                     <div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
                                       <Mic className="h-4 w-4 text-green-500" />
                                     </div>
                                     <audio
-                                      src={msg.mediaUrl}
+                                      src={msg.mediaUrl!}
                                       controls
-                                      className="h-7 flex-1 min-w-0"
-                                    >
-                                      Seu navegador não suporta áudio.
-                                    </audio>
+                                      className="h-8 flex-1 min-w-[120px]"
+                                      preload="metadata"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLAudioElement;
+                                        target.style.display = 'none';
+                                        const span = document.createElement('span');
+                                        span.className = 'text-xs text-muted-foreground';
+                                        span.textContent = 'Erro ao carregar áudio';
+                                        target.parentElement!.appendChild(span);
+                                      }}
+                                    />
                                     {msg.mediaDuration && (
                                       <span className="text-[10px] text-muted-foreground flex-shrink-0">
                                         {Math.floor(msg.mediaDuration / 60)}:{String(msg.mediaDuration % 60).padStart(2, '0')}
@@ -783,7 +806,7 @@ function ChatPageContent() {
                                 {/* Document */}
                                 {msg.mediaType === "document" && (
                                   <a
-                                    href={msg.mediaUrl}
+                                    href={msg.mediaUrl!}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex items-center gap-2 bg-background/50 rounded-lg p-2 hover:bg-background/70 transition-colors"
@@ -805,9 +828,39 @@ function ChatPageContent() {
                               </div>
                             )}
 
+                            {/* Fallback for media without URL */}
+                            {!msg.mediaUrl && msg.mediaType && !['reaction', 'deleted', 'poll', 'poll_vote', 'contact', 'contacts', 'location', 'live_location'].includes(msg.mediaType) && (
+                              <div className="mb-2 p-2 bg-background/30 rounded-lg">
+                                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                                  {(msg.mediaType === 'ptt' || msg.mediaType === 'audio') && <Mic className="h-4 w-4" />}
+                                  {msg.mediaType === 'image' && <span>Imagem não disponível</span>}
+                                  {msg.mediaType === 'video' && <span>Vídeo não disponível</span>}
+                                  {(msg.mediaType === 'ptt' || msg.mediaType === 'audio') && <span>Áudio não disponível</span>}
+                                  {msg.mediaType === 'sticker' && <span>Sticker</span>}
+                                  {msg.mediaType === 'document' && <FileText className="h-4 w-4" />}
+                                  {msg.mediaType === 'document' && <span>Documento não disponível</span>}
+                                  {msg.mediaType.includes('view_once') && <span>Mídia temporária</span>}
+                                </p>
+                              </div>
+                            )}
+
                             {/* Text Content */}
                             {msg.body && (
                               <p className="text-sm whitespace-pre-wrap break-words">{msg.body}</p>
+                            )}
+
+                            {/* Special message types without media */}
+                            {!msg.body && !msg.mediaUrl && msg.mediaType && ['reaction', 'deleted', 'poll', 'poll_vote', 'contact', 'contacts', 'location', 'live_location'].includes(msg.mediaType) && (
+                              <p className="text-sm text-muted-foreground italic">
+                                {msg.mediaType === 'reaction' && 'Reação'}
+                                {msg.mediaType === 'deleted' && 'Mensagem apagada'}
+                                {msg.mediaType === 'poll' && 'Enquete'}
+                                {msg.mediaType === 'poll_vote' && 'Voto em enquete'}
+                                {msg.mediaType === 'contact' && 'Contato'}
+                                {msg.mediaType === 'contacts' && 'Contatos'}
+                                {msg.mediaType === 'location' && 'Localização'}
+                                {msg.mediaType === 'live_location' && 'Localização ao vivo'}
+                              </p>
                             )}
 
                             {/* Timestamp and Read Status */}

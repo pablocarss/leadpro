@@ -13,6 +13,9 @@ import {
   Phone,
   Check,
   CheckCheck,
+  FileText,
+  Mic,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +47,11 @@ interface Message {
   isRead?: boolean;
   timestamp?: string;
   createdAt?: string;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaMimeType?: string | null;
+  mediaDuration?: number | null;
+  mediaFileName?: string | null;
 }
 
 interface InboxData {
@@ -438,7 +446,142 @@ export default function InboxPage() {
                                 : "bg-card rounded-tl-none"
                             }`}
                           >
-                            <p className="text-sm whitespace-pre-wrap break-words">{content}</p>
+                            {/* Media Content */}
+                            {msg.mediaUrl && msg.mediaType && (
+                              <div className="mb-2">
+                                {/* Image */}
+                                {msg.mediaType === "image" && (
+                                  <a href={msg.mediaUrl!} target="_blank" rel="noopener noreferrer">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={msg.mediaUrl!}
+                                      alt="Imagem"
+                                      className="rounded-lg max-w-full max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLImageElement;
+                                        target.style.display = 'none';
+                                        target.parentElement!.innerHTML = '<span class="text-xs text-muted-foreground">Erro ao carregar imagem</span>';
+                                      }}
+                                    />
+                                  </a>
+                                )}
+
+                                {/* Sticker */}
+                                {msg.mediaType === "sticker" && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={msg.mediaUrl}
+                                    alt="Sticker"
+                                    className="max-w-24 max-h-24"
+                                    onError={(e) => {
+                                      const target = e.target as HTMLImageElement;
+                                      target.style.display = 'none';
+                                    }}
+                                  />
+                                )}
+
+                                {/* Video */}
+                                {msg.mediaType === "video" && (
+                                  <video
+                                    src={msg.mediaUrl}
+                                    controls
+                                    className="rounded-lg max-w-full max-h-48"
+                                    onError={(e) => {
+                                      const target = e.target as HTMLVideoElement;
+                                      target.style.display = 'none';
+                                      target.parentElement!.innerHTML += '<span class="text-xs text-muted-foreground">Erro ao carregar vídeo</span>';
+                                    }}
+                                  >
+                                    Seu navegador não suporta vídeo.
+                                  </video>
+                                )}
+
+                                {/* Audio / Voice Note (PTT) */}
+                                {(msg.mediaType === "audio" || msg.mediaType === "ptt") && (
+                                  <div className="flex items-center gap-2 bg-background/50 rounded-full px-3 py-2 min-w-[200px]">
+                                    <div className="h-8 w-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                                      <Mic className="h-4 w-4 text-green-500" />
+                                    </div>
+                                    <audio
+                                      src={msg.mediaUrl!}
+                                      controls
+                                      className="h-8 flex-1 min-w-[120px]"
+                                      preload="metadata"
+                                      onError={(e) => {
+                                        const target = e.target as HTMLAudioElement;
+                                        target.style.display = 'none';
+                                        const span = document.createElement('span');
+                                        span.className = 'text-xs text-muted-foreground';
+                                        span.textContent = 'Erro ao carregar áudio';
+                                        target.parentElement!.appendChild(span);
+                                      }}
+                                    />
+                                    {msg.mediaDuration && (
+                                      <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                        {Math.floor(msg.mediaDuration / 60)}:{String(msg.mediaDuration % 60).padStart(2, '0')}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Document */}
+                                {msg.mediaType === "document" && (
+                                  <a
+                                    href={msg.mediaUrl!}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-2 bg-background/50 rounded-lg p-2 hover:bg-background/70 transition-colors"
+                                  >
+                                    <div className="h-8 w-8 rounded-lg bg-blue-500/20 flex items-center justify-center flex-shrink-0">
+                                      <FileText className="h-4 w-4 text-blue-500" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-medium truncate">
+                                        {msg.mediaFileName || "Documento"}
+                                      </p>
+                                      <p className="text-[10px] text-muted-foreground">
+                                        {msg.mediaMimeType || "Arquivo"}
+                                      </p>
+                                    </div>
+                                    <Download className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                  </a>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Fallback for media without URL */}
+                            {!msg.mediaUrl && msg.mediaType && !['reaction', 'deleted', 'poll', 'poll_vote', 'contact', 'contacts', 'location', 'live_location'].includes(msg.mediaType) && (
+                              <div className="mb-2 p-2 bg-background/30 rounded-lg">
+                                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                                  {(msg.mediaType === 'ptt' || msg.mediaType === 'audio') && <Mic className="h-4 w-4" />}
+                                  {msg.mediaType === 'image' && <span>Imagem não disponível</span>}
+                                  {msg.mediaType === 'video' && <span>Vídeo não disponível</span>}
+                                  {(msg.mediaType === 'audio' || msg.mediaType === 'ptt') && <span>Áudio não disponível</span>}
+                                  {msg.mediaType === 'document' && <span>Documento não disponível</span>}
+                                  {msg.mediaType === 'sticker' && <span>Sticker não disponível</span>}
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Text Content */}
+                            {content && (
+                              <p className="text-sm whitespace-pre-wrap break-words">{content}</p>
+                            )}
+
+                            {/* Special message types without media */}
+                            {!content && !msg.mediaUrl && msg.mediaType && ['reaction', 'deleted', 'poll', 'poll_vote', 'contact', 'contacts', 'location', 'live_location'].includes(msg.mediaType) && (
+                              <p className="text-sm text-muted-foreground italic">
+                                {msg.mediaType === 'reaction' && 'Reação'}
+                                {msg.mediaType === 'deleted' && 'Mensagem apagada'}
+                                {msg.mediaType === 'poll' && 'Enquete'}
+                                {msg.mediaType === 'poll_vote' && 'Voto em enquete'}
+                                {msg.mediaType === 'contact' && 'Contato compartilhado'}
+                                {msg.mediaType === 'contacts' && 'Contatos compartilhados'}
+                                {msg.mediaType === 'location' && 'Localização compartilhada'}
+                                {msg.mediaType === 'live_location' && 'Localização ao vivo'}
+                              </p>
+                            )}
+
                             <div className="flex items-center justify-end gap-1 mt-1">
                               <span className="text-[9px] text-muted-foreground">
                                 {formatTime(timestamp)}

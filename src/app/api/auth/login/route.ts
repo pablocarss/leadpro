@@ -15,11 +15,17 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json(result, { status: 200 })
 
+    // Check if request is coming from HTTPS (ngrok or production)
+    const isHttps = request.headers.get('x-forwarded-proto') === 'https' ||
+                    request.url.startsWith('https') ||
+                    process.env.NODE_ENV === 'production'
+
     response.cookies.set('token', result.token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: isHttps,
+      sameSite: isHttps ? 'none' : 'lax', // 'none' required for cross-site HTTPS
       maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: '/',
     })
 
     return response

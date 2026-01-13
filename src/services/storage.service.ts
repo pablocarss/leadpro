@@ -41,7 +41,7 @@ class StorageService {
         console.log(`Creating bucket: ${this.bucket}`)
         await this.client.makeBucket(this.bucket)
 
-        // Set bucket policy to allow public read with CORS
+        // Set bucket policy to allow public read
         const policy = {
           Version: '2012-10-17',
           Statement: [
@@ -55,6 +55,8 @@ class StorageService {
         }
         await this.client.setBucketPolicy(this.bucket, JSON.stringify(policy))
         console.log(`Bucket ${this.bucket} created with public read policy`)
+
+        // Note: CORS is configured via MinIO environment in docker-compose
       } else {
         console.log(`Bucket ${this.bucket} already exists`)
       }
@@ -164,6 +166,11 @@ class StorageService {
   }
 
   getPublicUrl(objectName: string): string {
+    // Use relative URL to work with any host (localhost, ngrok, production)
+    return `/api/media/${objectName}`
+  }
+
+  getDirectMinioUrl(objectName: string): string {
     const protocol = process.env.MINIO_USE_SSL === 'true' ? 'https' : 'http'
     const endpoint = process.env.MINIO_ENDPOINT || 'localhost'
     const port = process.env.MINIO_PORT || '9000'

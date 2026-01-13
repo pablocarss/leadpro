@@ -5,15 +5,14 @@ import makeWASocket, {
   proto,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  isJidGroup,
-  jidNormalizedUser,
   downloadMediaMessage,
-  getContentType,
+  isJidGroup,
 } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
 import * as QRCode from 'qrcode'
 import { prisma } from '@/lib/prisma'
 import { storageService } from './storage.service'
+import { addAutomationJob, addAIAssistantJob } from '@/lib/queue'
 import path from 'path'
 import fs from 'fs'
 import pino from 'pino'
@@ -23,11 +22,13 @@ interface WhatsappConnection {
   socket: WASocket
   sessionId: string
   historyDays: number
+  syncGroups: boolean
 }
 
 interface SyncSettings {
   syncContacts: boolean
   syncHistory: boolean
+  syncGroups: boolean
   historyDays: number
 }
 
@@ -78,18 +79,20 @@ class WhatsappService {
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
       const { version } = await fetchLatestBaileysVersion()
 
-      // Get history days from settings or database
+      // Get settings from database or use provided settings
       let historyDays = settings?.historyDays ?? 7
+      let syncGroups = settings?.syncGroups ?? false
       if (!settings) {
         const existingSession = await prisma.whatsappSession.findUnique({
           where: { id: sessionId },
         })
         if (existingSession) {
           historyDays = existingSession.historyDays
+          syncGroups = existingSession.syncGroups
         }
       }
 
-      console.log(`[WhatsApp ${sessionId}] Creating socket with version ${version.join('.')}`)
+      console.log(`[WhatsApp ${sessionId}] Creating socket with version ${version.join('.')}, syncGroups: ${syncGroups}`)
 
       const socket = makeWASocket({
         version,
@@ -108,7 +111,7 @@ class WhatsappService {
         defaultQueryTimeoutMs: 60000,
       })
 
-      this.connections.set(sessionId, { socket, sessionId, historyDays })
+      this.connections.set(sessionId, { socket, sessionId, historyDays, syncGroups })
 
       return new Promise((resolve) => {
         socket.ev.on('connection.update', async (update) => {
@@ -275,9 +278,10 @@ class WhatsappService {
 
         // Handle history sync
         socket.ev.on('messaging-history.set', async ({ chats, contacts, messages, isLatest }) => {
-          // Get historyDays from connection object (already loaded)
+          // Get settings from connection object (already loaded)
           const conn = this.connections.get(sessionId)
           const configuredDays = conn?.historyDays || historyDays
+          const shouldSyncGroups = conn?.syncGroups || syncGroups
 
           // Calculate cutoff timestamp based on configured days
           const cutoffDate = new Date()
@@ -285,7 +289,7 @@ class WhatsappService {
           cutoffDate.setHours(0, 0, 0, 0) // Start of the day X days ago
           const cutoffTimestamp = Math.floor(cutoffDate.getTime() / 1000)
 
-          console.log(`History sync: ${messages.length} messages received, filtering to last ${configuredDays} days (since ${cutoffDate.toISOString()})`)
+          console.log(`History sync: ${messages.length} messages received, filtering to last ${configuredDays} days (since ${cutoffDate.toISOString()}), syncGroups: ${shouldSyncGroups}`)
 
           // Mark as syncing
           await prisma.whatsappSession.update({
@@ -301,13 +305,21 @@ class WhatsappService {
             await this.handleContactsSync(sessionId, contacts)
           }
 
-          // Sync messages from history (filtered by days)
+          // Sync messages from history (filtered by days and groups)
           let syncedMessages = 0
           let skippedMessages = 0
+          let skippedGroups = 0
           const totalMessages = messages.length
 
           for (let i = 0; i < messages.length; i++) {
             const msg = messages[i]
+
+            // Skip group messages if syncGroups is disabled
+            if (msg.key?.remoteJid && isJidGroup(msg.key.remoteJid) && !shouldSyncGroups) {
+              skippedGroups++
+              continue
+            }
+
             // Filter by date - messageTimestamp can be number or Long
             const msgTimestamp = toNumber(msg.messageTimestamp)
 
@@ -341,7 +353,7 @@ class WhatsappService {
             },
           })
 
-          console.log(`History sync complete: ${syncedMessages} messages synced, ${skippedMessages} skipped (older than ${configuredDays} days)`)
+          console.log(`History sync complete: ${syncedMessages} messages synced, ${skippedMessages} skipped (older than ${configuredDays} days), ${skippedGroups} group messages skipped`)
         })
 
         socket.ev.on('messages.update', async (updates) => {
@@ -385,9 +397,192 @@ class WhatsappService {
 
     const connection = this.connections.get(sessionId)
 
+    // Verify socket is available
+    if (!connection) {
+      console.error(`[WhatsApp ${sessionId}] ERRO: Connection não encontrada no map`)
+      return
+    }
+
+    if (!connection.socket) {
+      console.error(`[WhatsApp ${sessionId}] ERRO: Socket não disponível na connection`)
+      return
+    }
+
+    console.log(`[WhatsApp ${sessionId}] Socket disponível, processando mensagens...`)
+
     for (const msg of messages) {
-      console.log(`[WhatsApp ${sessionId}] Processing message from: ${msg.key?.remoteJid}, id: ${msg.key?.id}`)
-      await this.saveHistoryMessage(sessionId, msg, connection?.socket)
+      const fromMe = msg.key?.fromMe === true
+      console.log(`[WhatsApp ${sessionId}] Processing message from: ${msg.key?.remoteJid}, id: ${msg.key?.id}, fromMe: ${fromMe}`)
+
+      if (!msg.key?.remoteJid) continue
+      if (msg.key.remoteJid === 'status@broadcast') continue
+      // Skip newsletters (WhatsApp Channels) - media cannot be downloaded
+      if (msg.key.remoteJid.includes('@newsletter')) continue
+
+      // Skip messages sent by me - they are already saved when sent
+      if (fromMe) {
+        console.log(`[WhatsApp ${sessionId}] Skipping own message (fromMe=true)`)
+        continue
+      }
+
+      const chatId = msg.key.remoteJid
+
+      // Skip groups if syncGroups is disabled
+      if (isJidGroup(chatId) && !connection?.syncGroups) {
+        console.log(`[WhatsApp ${sessionId}] Skipping group message (syncGroups disabled)`)
+        continue
+      }
+
+      // Skip messages without actual content (msg.message)
+      if (!msg.message) {
+        console.log(`[WhatsApp ${sessionId}] Skipping message without content`)
+        continue
+      }
+
+      // Extract message content (socket is guaranteed to exist at this point)
+      const messageContent = await this.extractMessageContent(msg, connection.socket)
+
+      // Skip if no content could be extracted
+      if (!messageContent && !msg.message) {
+        console.log(`[WhatsApp ${sessionId}] Skipping message - no content extracted`)
+        continue
+      }
+
+      const timestamp = toNumber(msg.messageTimestamp)
+      const messageDate = timestamp > 0 ? new Date(timestamp * 1000) : new Date()
+      const body = messageContent?.text || ''
+
+      // Skip empty messages (no text and no media)
+      if (!body && !messageContent?.mediaType) {
+        console.log(`[WhatsApp ${sessionId}] Skipping empty message (no body, no media)`)
+        continue
+      }
+
+      // Save message directly to database
+      try {
+        await prisma.whatsappMessage.upsert({
+          where: { messageId: msg.key.id || '' },
+          create: {
+            messageId: msg.key.id || undefined,
+            chatId,
+            from: chatId,
+            to: 'me',
+            body,
+            mediaUrl: messageContent?.mediaUrl,
+            mediaType: messageContent?.mediaType,
+            mediaMimeType: messageContent?.mediaMimeType,
+            mediaDuration: messageContent?.mediaDuration,
+            mediaFileName: messageContent?.mediaFileName,
+            isFromMe: false,
+            timestamp: messageDate,
+            sessionId,
+          },
+          update: {},
+        })
+
+        console.log(`[WhatsApp ${sessionId}] Message saved: ${msg.key.id}, body: ${body.substring(0, 50)}...`)
+
+        // Check AI assistant first (if enabled, it will respond)
+        const aiHandled = await this.checkAndTriggerAIAssistant(sessionId, chatId, body)
+
+        // Only run automations if AI didn't handle
+        if (!aiHandled) {
+          await this.checkAndTriggerAutomations(sessionId, chatId, body)
+        }
+      } catch (error) {
+        // Silently ignore duplicate errors
+        if (!(error instanceof Error && error.message.includes('Unique constraint'))) {
+          console.error(`[WhatsApp ${sessionId}] Error saving message:`, error)
+        }
+      }
+    }
+  }
+
+  /**
+   * Check if AI assistant is enabled and trigger it to respond
+   * Returns true if AI assistant will handle the message
+   */
+  private async checkAndTriggerAIAssistant(
+    sessionId: string,
+    chatId: string,
+    messageBody: string
+  ): Promise<boolean> {
+    try {
+      // Find AI assistant config for this session
+      const config = await prisma.aIAssistantConfig.findUnique({
+        where: { whatsappSessionId: sessionId },
+      })
+
+      // If no config or not enabled, return false
+      if (!config || !config.isEnabled) {
+        return false
+      }
+
+      // Skip empty messages
+      if (!messageBody || messageBody.trim().length === 0) {
+        return false
+      }
+
+      console.log(`[AI Assistant] Triggering for session ${sessionId}, chat ${chatId}`)
+
+      // Add job to queue for async processing
+      await addAIAssistantJob({
+        sessionId,
+        chatId,
+        messageBody,
+        configId: config.id,
+      })
+
+      return true
+    } catch (error) {
+      console.error('Error checking AI assistant:', error)
+      return false
+    }
+  }
+
+  private async checkAndTriggerAutomations(sessionId: string, chatId: string, messageBody: string) {
+    try {
+      // Find active automations for this session
+      const automations = await prisma.automation.findMany({
+        where: {
+          whatsappSessionId: sessionId,
+          isActive: true,
+        },
+      })
+
+      for (const automation of automations) {
+        let shouldTrigger = false
+
+        switch (automation.trigger) {
+          case 'ALL_MESSAGES':
+            shouldTrigger = true
+            break
+          case 'KEYWORD':
+            if (automation.triggerValue && messageBody.toLowerCase().includes(automation.triggerValue.toLowerCase())) {
+              shouldTrigger = true
+            }
+            break
+          case 'NEW_CONVERSATION':
+            // Check if this is a new conversation
+            const existingMessages = await prisma.whatsappMessage.count({
+              where: { sessionId, chatId },
+            })
+            shouldTrigger = existingMessages <= 1
+            break
+        }
+
+        if (shouldTrigger) {
+          await addAutomationJob({
+            automationId: automation.id,
+            chatId,
+            sessionId,
+            trigger: automation.trigger,
+            messageBody,
+          })
+        }
+      }
+    } catch (error) {
+      console.error('Error checking automations:', error)
     }
   }
 
@@ -402,8 +597,14 @@ class WhatsappService {
       // Skip status broadcasts
       if (msg.key.remoteJid === 'status@broadcast') return
 
+      // Skip newsletters (WhatsApp Channels) - media cannot be downloaded
+      if (msg.key.remoteJid.includes('@newsletter')) return
+
       // History messages might not have msg.message directly
       // They can have the message content in different places
+      if (!socket) {
+        console.error(`[History] ERRO: Socket não disponível para baixar mídia`)
+      }
       const messageContent = await this.extractMessageContent(msg, socket)
 
       const chatId = msg.key.remoteJid
@@ -535,23 +736,123 @@ class WhatsappService {
     }
 
     if (message.locationMessage) {
-      return { text: '[Localização]', mediaType: 'location' }
+      const lat = message.locationMessage.degreesLatitude
+      const lng = message.locationMessage.degreesLongitude
+      return { text: `[Localização: ${lat}, ${lng}]`, mediaType: 'location' }
     }
 
+    // Handle reaction messages
+    if (message.reactionMessage) {
+      const emoji = message.reactionMessage.text || ''
+      return { text: emoji ? `[Reação: ${emoji}]` : '[Reação removida]', mediaType: 'reaction' }
+    }
+
+    // Handle button response messages
+    if (message.buttonsResponseMessage) {
+      return { text: message.buttonsResponseMessage.selectedDisplayText || '[Resposta de botão]', mediaType: 'button_response' }
+    }
+
+    // Handle list response messages
+    if (message.listResponseMessage) {
+      return { text: message.listResponseMessage.title || '[Resposta de lista]', mediaType: 'list_response' }
+    }
+
+    // Handle template button reply
+    if (message.templateButtonReplyMessage) {
+      return { text: message.templateButtonReplyMessage.selectedDisplayText || '[Resposta de template]', mediaType: 'template_response' }
+    }
+
+    // Handle poll messages
+    if (message.pollCreationMessage) {
+      return { text: `[Enquete: ${message.pollCreationMessage.name}]`, mediaType: 'poll' }
+    }
+
+    // Handle poll update messages
+    if (message.pollUpdateMessage) {
+      return { text: '[Voto em enquete]', mediaType: 'poll_vote' }
+    }
+
+    // Handle live location
+    if (message.liveLocationMessage) {
+      return { text: '[Localização ao vivo]', mediaType: 'live_location' }
+    }
+
+    // Handle view once messages (ephemeral)
+    if (message.viewOnceMessage || message.viewOnceMessageV2) {
+      const innerMessage = message.viewOnceMessage?.message || message.viewOnceMessageV2?.message
+      if (innerMessage?.imageMessage) {
+        return { text: '[Foto visualização única]', mediaType: 'view_once_image' }
+      }
+      if (innerMessage?.videoMessage) {
+        return { text: '[Vídeo visualização única]', mediaType: 'view_once_video' }
+      }
+      return { text: '[Mídia visualização única]', mediaType: 'view_once' }
+    }
+
+    // Handle protocol messages (edits, revokes, etc.)
+    if (message.protocolMessage) {
+      const type = message.protocolMessage.type
+      if (type === 0) {
+        return { text: '[Mensagem apagada]', mediaType: 'deleted' }
+      }
+      if (type === 14) {
+        const editedMsg = (message.protocolMessage.editedMessage as proto.IWebMessageInfo | undefined)?.message
+        if (editedMsg?.conversation) {
+          return { text: editedMsg.conversation }
+        }
+        if (editedMsg?.extendedTextMessage?.text) {
+          return { text: editedMsg.extendedTextMessage.text }
+        }
+      }
+      // Skip other protocol messages
+      return null
+    }
+
+    // Handle contact array messages
+    if (message.contactsArrayMessage) {
+      const contacts = message.contactsArrayMessage.contacts || []
+      return { text: `[${contacts.length} contatos compartilhados]`, mediaType: 'contacts' }
+    }
+
+    // Fallback: try to get any text from known fields
+    const messageKeys = Object.keys(message)
+    console.log(`[WhatsApp] Unhandled message type, keys: ${messageKeys.join(', ')}`)
+
+    // Return null for truly empty/unrecognized messages
     return null
   }
 
   private async downloadAndStoreMedia(
     msg: proto.IWebMessageInfo,
-    socket?: WASocket,
+    socket: WASocket | undefined,
     mediaType: string = 'file',
     extension: string = 'bin'
   ): Promise<string | undefined> {
-    if (!socket || !msg.key) return undefined
+    const messageId = msg.key?.id || `${Date.now()}`
+
+    // Validate inputs
+    if (!socket) {
+      console.error(`[Media ${messageId}] ERRO: Socket não disponível`)
+      return undefined
+    }
+
+    if (!msg.key) {
+      console.error(`[Media ${messageId}] ERRO: Message key não disponível`)
+      return undefined
+    }
+
+    if (!msg.message) {
+      console.error(`[Media ${messageId}] ERRO: Message content não disponível`)
+      return undefined
+    }
+
+    console.log(`[Media ${messageId}] Iniciando download de ${mediaType}...`)
 
     try {
+      // Download media from WhatsApp servers
+      // Cast to expected type since we've already validated msg.key exists
       const buffer = await downloadMediaMessage(
-        msg as { key: typeof msg.key } & proto.IWebMessageInfo,
+        msg as Parameters<typeof downloadMediaMessage>[0],
         'buffer',
         {},
         {
@@ -560,22 +861,53 @@ class WhatsappService {
         }
       )
 
-      if (!buffer || !(buffer instanceof Buffer)) {
-        console.error('Failed to download media: buffer is empty')
+      // Validate buffer
+      if (!buffer) {
+        console.error(`[Media ${messageId}] ERRO: Buffer vazio após download`)
         return undefined
       }
 
-      const messageId = msg.key?.id || `${Date.now()}`
+      if (!(buffer instanceof Buffer) && !Buffer.isBuffer(buffer)) {
+        // Try to convert to buffer if it's a Uint8Array or similar
+        const convertedBuffer = Buffer.from(buffer as ArrayBuffer)
+        if (!convertedBuffer || convertedBuffer.length === 0) {
+          console.error(`[Media ${messageId}] ERRO: Não foi possível converter para Buffer`)
+          return undefined
+        }
+        console.log(`[Media ${messageId}] Buffer convertido: ${convertedBuffer.length} bytes`)
+
+        // Upload to MinIO
+        const mediaUrl = await storageService.uploadWhatsAppMedia(
+          convertedBuffer,
+          messageId,
+          mediaType,
+          extension
+        )
+        console.log(`[Media ${messageId}] Upload concluído: ${mediaUrl}`)
+        return mediaUrl
+      }
+
+      console.log(`[Media ${messageId}] Download concluído: ${buffer.length} bytes`)
+
+      // Upload to MinIO
       const mediaUrl = await storageService.uploadWhatsAppMedia(
-        buffer,
+        buffer as Buffer,
         messageId,
         mediaType,
         extension
       )
 
+      console.log(`[Media ${messageId}] Upload concluído: ${mediaUrl}`)
       return mediaUrl
     } catch (error) {
-      console.error('Error downloading media:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      console.error(`[Media ${messageId}] ERRO no download/upload de ${mediaType}:`, errorMessage)
+
+      // Log stack trace for debugging
+      if (error instanceof Error && error.stack) {
+        console.error(`[Media ${messageId}] Stack:`, error.stack)
+      }
+
       return undefined
     }
   }
@@ -1046,6 +1378,30 @@ class WhatsappService {
     }
   }
 
+  getSocket(sessionId: string): WASocket | undefined {
+    return this.connections.get(sessionId)?.socket
+  }
+
+  async downloadMediaForMessage(
+    messageId: string,
+    sessionId: string,
+    mediaType: string,
+    fileName?: string
+  ): Promise<string | undefined> {
+    const connection = this.connections.get(sessionId)
+    if (!connection) return undefined
+
+    try {
+      // This method would need to re-fetch the message from WhatsApp
+      // For now, we return undefined as the media should be downloaded at receive time
+      console.log(`[WhatsApp ${sessionId}] Attempting to download media for message ${messageId}`)
+      return undefined
+    } catch (error) {
+      console.error('Error downloading media:', error)
+      return undefined
+    }
+  }
+
   async getSessionStatus(sessionId: string): Promise<string> {
     const connection = this.connections.get(sessionId)
 
@@ -1060,10 +1416,6 @@ class WhatsappService {
     return this.connections.has(sessionId)
   }
 
-  getSocket(sessionId: string): WASocket | undefined {
-    return this.connections.get(sessionId)?.socket
-  }
-
   async restoreSession(sessionId: string): Promise<void> {
     const sessionPath = path.join(this.sessionsPath, sessionId)
 
@@ -1076,6 +1428,7 @@ class WhatsappService {
         await this.createSession(sessionId, {
           syncContacts: session.syncContacts,
           syncHistory: session.syncHistory,
+          syncGroups: session.syncGroups,
           historyDays: session.historyDays,
         })
       }

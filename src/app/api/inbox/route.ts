@@ -68,12 +68,30 @@ export async function GET(request: NextRequest) {
 
           const phoneNumber = msg.chatId.replace('@s.whatsapp.net', '').replace('@g.us', '')
 
+          // Generate media preview text based on media type
+          let lastMessage = msg.body
+          if (!lastMessage && msg.mediaType) {
+            const mediaLabels: Record<string, string> = {
+              image: 'Imagem',
+              video: 'Vídeo',
+              audio: 'Áudio',
+              ptt: 'Áudio',
+              document: 'Documento',
+              sticker: 'Sticker',
+              contact: 'Contato',
+              contacts: 'Contatos',
+              location: 'Localização',
+              poll: 'Enquete',
+            }
+            lastMessage = mediaLabels[msg.mediaType] || 'Mídia'
+          }
+
           whatsappConversations.push({
             id: `wa_${msg.sessionId}_${msg.chatId}`,
             channel: 'whatsapp',
             name: contact?.name || phoneNumber,
             avatar: contact?.avatar || null,
-            lastMessage: msg.body || '[Mídia]',
+            lastMessage: lastMessage || '',
             lastMessageTime: msg.timestamp,
             unreadCount,
             sessionId: msg.sessionId,

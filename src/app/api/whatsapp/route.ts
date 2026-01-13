@@ -9,6 +9,7 @@ const createSessionSchema = z.object({
   integrationId: z.string().cuid(),
   syncContacts: z.boolean().default(false),
   syncHistory: z.boolean().default(false),
+  syncGroups: z.boolean().default(false),
   historyDays: z.number().min(1).max(30).default(7),
 })
 
@@ -78,6 +79,7 @@ export async function POST(request: NextRequest) {
         status: 'CONNECTING',
         syncContacts: validatedData.syncContacts,
         syncHistory: validatedData.syncHistory,
+        syncGroups: validatedData.syncGroups,
         historyDays: validatedData.historyDays,
       },
     })
@@ -86,6 +88,7 @@ export async function POST(request: NextRequest) {
     whatsappService.createSession(session.id, {
       syncContacts: validatedData.syncContacts,
       syncHistory: validatedData.syncHistory,
+      syncGroups: validatedData.syncGroups,
       historyDays: validatedData.historyDays,
     }).catch(console.error)
 

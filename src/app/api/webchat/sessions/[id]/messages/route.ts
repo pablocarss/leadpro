@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { addWebChatMessageJob } from '@/lib/queue'
 import { z } from 'zod'
 
 const createMessageSchema = z.object({
@@ -126,6 +127,20 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       where: { id },
       data: { updatedAt: new Date() },
     })
+
+    // Add to queue for additional processing (notifications, etc.)
+    try {
+      await addWebChatMessageJob({
+        sessionId: id,
+        content: validatedData.content,
+        isFromVisitor,
+        operatorId: operatorId || undefined,
+        visitorId: validatedData.visitorId,
+      })
+    } catch {
+      // Queue error should not fail the request
+      console.error('Error adding webchat message to queue')
+    }
 
     return NextResponse.json(message, { status: 201, headers: corsHeaders })
   } catch (error) {

@@ -353,6 +353,7 @@ model WhatsappSession {
   // Sync settings
   syncContacts     Boolean @default(false)
   syncHistory      Boolean @default(false)
+  syncGroups       Boolean @default(false)
   historyDays      Int     @default(7)
   lastHistorySync  DateTime?
   lastContactSync  DateTime?
@@ -367,6 +368,7 @@ model WhatsappSession {
   messages      WhatsappMessage[]
   contacts      Contact[]
   automations   Automation[]
+  aiAssistant   AIAssistantConfig?
 
   @@index([integrationId])
   @@map("whatsapp_sessions")
@@ -470,6 +472,36 @@ enum ExecutionStatus {
   COMPLETED
   CANCELLED
   ERROR
+}
+
+// ==================== AI ASSISTANT ====================
+
+model AIAssistantConfig {
+  id                String     @id @default(cuid())
+  provider          AIProvider @default(OPENAI)
+  model             String     @default("gpt-4o-mini")
+  apiKey            String     // Encrypted API key
+  systemPrompt      String     @db.Text
+  temperature       Float      @default(0.7)
+  maxTokens         Int        @default(1024)
+  contextMessages   Int        @default(10)
+  isEnabled         Boolean    @default(false)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  // Relations - One-to-One with WhatsappSession
+  whatsappSessionId String     @unique
+  whatsappSession   WhatsappSession @relation(fields: [whatsappSessionId], references: [id], onDelete: Cascade)
+
+  @@index([whatsappSessionId])
+  @@map("ai_assistant_configs")
+}
+
+enum AIProvider {
+  OPENAI
+  ANTHROPIC
+  DEEPSEEK
+  GEMINI
 }
 
 // ==================== PIPELINES ====================

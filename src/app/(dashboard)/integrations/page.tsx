@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { AIAssistantDialog } from "@/components/ai-assistant-dialog";
 
 interface WhatsappMessage {
   id: string;
@@ -123,6 +124,8 @@ export default function IntegrationsPage() {
   const [isIntegrationOpen, setIsIntegrationOpen] = useState(false);
   const [isSessionOpen, setIsSessionOpen] = useState(false);
   const [isQrOpen, setIsQrOpen] = useState(false);
+  const [isAIDialogOpen, setIsAIDialogOpen] = useState(false);
+  const [aiDialogSession, setAIDialogSession] = useState<WhatsappSession | null>(null);
   const [selectedSession, setSelectedSession] = useState<WhatsappSession | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -143,6 +146,7 @@ export default function IntegrationsPage() {
     integrationId: "",
     syncContacts: true,
     syncHistory: true,
+    syncGroups: false,
     historyDays: 7,
   });
 
@@ -288,7 +292,7 @@ export default function IntegrationsPage() {
       const newSession = await response.json();
       toast.success("Sessão criada! Aguarde o QR Code.");
       setIsSessionOpen(false);
-      setSessionForm({ name: "", integrationId: "", syncContacts: true, syncHistory: true, historyDays: 7 });
+      setSessionForm({ name: "", integrationId: "", syncContacts: true, syncHistory: true, syncGroups: false, historyDays: 7 });
 
       setTimeout(async () => {
         const sessionData = await fetchSessionData(newSession.id);
@@ -604,6 +608,18 @@ export default function IntegrationsPage() {
                                         >
                                           <PowerOff className="mr-2 h-4 w-4" />
                                           Desconectar
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setAIDialogSession(session);
+                                            setIsAIDialogOpen(true);
+                                          }}
+                                        >
+                                          <Bot className="mr-2 h-4 w-4" />
+                                          IA
                                         </Button>
                                       </>
                                     )}
@@ -927,29 +943,45 @@ export default function IntegrationsPage() {
                   </div>
 
                   {sessionForm.syncHistory && (
-                    <div className="flex items-center justify-between pl-4 border-l-2">
-                      <div className="space-y-0.5">
-                        <Label htmlFor="historyDays">Dias de Histórico</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Quantos dias de mensagens importar
-                        </p>
+                    <>
+                      <div className="flex items-center justify-between pl-4 border-l-2">
+                        <div className="space-y-0.5">
+                          <Label htmlFor="historyDays">Dias de Histórico</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Quantos dias de mensagens importar
+                          </p>
+                        </div>
+                        <Select
+                          value={sessionForm.historyDays.toString()}
+                          onValueChange={(value) => setSessionForm({ ...sessionForm, historyDays: parseInt(value) })}
+                        >
+                          <SelectTrigger className="w-24">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">1 dia</SelectItem>
+                            <SelectItem value="3">3 dias</SelectItem>
+                            <SelectItem value="7">7 dias</SelectItem>
+                            <SelectItem value="14">14 dias</SelectItem>
+                            <SelectItem value="30">30 dias</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
-                      <Select
-                        value={sessionForm.historyDays.toString()}
-                        onValueChange={(value) => setSessionForm({ ...sessionForm, historyDays: parseInt(value) })}
-                      >
-                        <SelectTrigger className="w-24">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">1 dia</SelectItem>
-                          <SelectItem value="3">3 dias</SelectItem>
-                          <SelectItem value="7">7 dias</SelectItem>
-                          <SelectItem value="14">14 dias</SelectItem>
-                          <SelectItem value="30">30 dias</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+
+                      <div className="flex items-center justify-between pl-4 border-l-2">
+                        <div className="space-y-0.5">
+                          <Label htmlFor="syncGroups">Sincronizar Grupos</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Importar mensagens de grupos
+                          </p>
+                        </div>
+                        <Switch
+                          id="syncGroups"
+                          checked={sessionForm.syncGroups}
+                          onCheckedChange={(checked) => setSessionForm({ ...sessionForm, syncGroups: checked })}
+                        />
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -1009,6 +1041,16 @@ export default function IntegrationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Dialog AI Assistant */}
+      {aiDialogSession && (
+        <AIAssistantDialog
+          open={isAIDialogOpen}
+          onOpenChange={setIsAIDialogOpen}
+          sessionId={aiDialogSession.id}
+          sessionName={aiDialogSession.name}
+        />
+      )}
 
       {/* Dialog Chat */}
       <Dialog open={isChatOpen} onOpenChange={setIsChatOpen}>
